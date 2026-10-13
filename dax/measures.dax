@@ -1,0 +1,114 @@
+// =====================================================================
+// African Pickleball Association - Power BI DAX
+// Tables: Members, CheckIns, Dates
+// =====================================================================
+
+
+// ---------------------------------------------------------------------
+// CALCULATED TABLE
+// ---------------------------------------------------------------------
+
+// Calendar table used by the "Paying members over time" line chart.
+Dates = CALENDAR ( DATE ( 2026, 8, 1 ), TODAY () )
+
+
+// ---------------------------------------------------------------------
+// CALCULATED COLUMNS (CheckIns table)
+// ---------------------------------------------------------------------
+
+// Short meetup label for chart axes, e.g. "Oct 6".
+Meetup = FORMAT ( CheckIns[Date], "mmm d" )
+
+// Month label for the monthly chart, e.g. "Oct 2026".
+Month = FORMAT ( CheckIns[Date], "mmm yyyy" )
+
+// One number per month (e.g. 202610). Month is sorted by this column
+// (Column tools > Sort by column) so months stay in calendar order.
+Month Sort = YEAR ( CheckIns[Date] ) * 100 + MONTH ( CheckIns[Date] )
+
+
+// ---------------------------------------------------------------------
+// MEASURES - CheckIns table
+// ---------------------------------------------------------------------
+
+// One row = one person at one meetup.
+Check-Ins = COUNTROWS ( CheckIns ) + 0
+
+Meetups Held = DISTINCTCOUNT ( CheckIns[Date] )
+
+Unique Players = DISTINCTCOUNT ( CheckIns[Name] )
+
+Avg Attendance = DIVIDE ( [Check-Ins], [Meetups Held] )
+
+// Largest single meetup.
+Peak Attendance =
+MAXX ( VALUES ( CheckIns[Date] ), CALCULATE ( COUNTROWS ( CheckIns ) ) )
+
+Member Check-Ins = CALCULATE ( [Check-Ins], CheckIns[Type] = "Member" )
+
+Guest Check-Ins = CALCULATE ( [Check-Ins], CheckIns[Type] = "Day Pass" )
+
+Guest Share = DIVIDE ( [Guest Check-Ins], [Check-Ins] )
+
+Unique Guests =
+CALCULATE ( DISTINCTCOUNT ( CheckIns[Name] ), CheckIns[Type] = "Day Pass" )
+
+// Came on a day pass at least once and now appear on the Members list.
+// Member ID (auto) is filled by an Excel lookup on every row for anyone
+// on the Members list, including their earlier day-pass visits.
+Guests Who Became Members =
+CALCULATE (
+    DISTINCTCOUNT ( CheckIns[Member ID (auto)] ),
+    CheckIns[Type] = "Day Pass",
+    CheckIns[Member ID (auto)] <> ""
+) + 0
+
+Repeat Players (3+ Visits) =
+COUNTROWS (
+    FILTER ( VALUES ( CheckIns[Name] ), CALCULATE ( COUNTROWS ( CheckIns ) ) >= 3 )
+) + 0
+
+Day Pass Revenue = SUM ( CheckIns[Amount ($)] ) + 0
+
+
+// ---------------------------------------------------------------------
+// MEASURES - Members table
+// ---------------------------------------------------------------------
+
+// Status comes from Stripe. "Active (DUPLICATE)" flags a member with two
+// subscriptions; they still count as one active member.
+Active Members =
+COUNTROWS ( FILTER ( Members, LEFT ( Members[Status], 6 ) = "Active" ) ) + 0
+
+Former Members =
+COUNTROWS ( FILTER ( Members, Members[Status] = "Former member" ) ) + 0
+
+Renewing Next 7 Days =
+COUNTROWS (
+    FILTER (
+        Members,
+        LEFT ( Members[Status], 6 ) = "Active"
+            && Members[Renews / Ends] >= TODAY ()
+            && Members[Renews / Ends] <= TODAY () + 7
+    )
+) + 0
+
+// $20/month membership.
+Monthly Membership Revenue = [Active Members] * 20
+
+// Members whose membership covered each date: joined on or before it and
+// had not yet left. Returns blank for dates outside the Dates table.
+Members Over Time =
+VAR d = MAX ( Dates[Date] )
+RETURN
+    IF (
+        NOT ISBLANK ( d ),
+        COUNTROWS (
+            FILTER (
+                ALL ( Members ),
+                NOT ISBLANK ( Members[Member Since] )
+                    && Members[Member Since] <= d
+                    && ( ISBLANK ( Members[Ends On (former)] ) || Members[Ends On (former)] >= d )
+            )
+        ) + 0
+    )
